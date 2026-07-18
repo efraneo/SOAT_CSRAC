@@ -47,6 +47,36 @@ def _paso_2():
     col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
         mostrar_alerta("info", f"Correo: **{st.session_state.get('correo_confirmado', '')}**")
+        
+        # ═══════════════════════════════════════════════════
+        #  INFOGRAMA DE HABEAS DATA - CLÍNICA SAN RAFAEL
+        # ═══════════════════════════════════════════════════
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #f3f4f6, #e5e7eb); border: 1px solid #d1d5db; border-radius: 12px; padding: 20px; margin-bottom: 20px; border-left: 5px solid #1a237e;">
+            <div style="display: flex; align-items: center; margin-bottom: 12px;">
+                <div style="font-size: 28px; margin-right: 10px;">🔒</div>
+                <h4 style="margin: 0; color: #1a237e; font-size: 16px;">Autorización de Tratamiento de Datos Personales</h4>
+            </div>
+            <p style="font-size: 12px; color: #374151; line-height: 1.5; margin: 0 0 12px 0;">
+                En cumplimiento de la <strong>Ley 1581 de 2012</strong> y el Decreto 1377 de 2013, los datos personales suministrados serán tratados por la 
+                <strong>Clínica San Rafael Alta Complejidad SAS</strong> con la finalidad de realizar el registro vehicular, control de seguridad y salud en el trabajo (SST), 
+                y verificación de pólizas SOAT.
+            </p>
+            <div style="background: white; padding: 10px; border-radius: 8px; margin-bottom: 12px;">
+                <p style="margin: 0 0 5px 0; font-size: 11px; color: #1f2937;"><strong>📄 Datos a recolectar:</strong> Identificación, nombres, cargo, fecha de nacimiento, correo, datos del vehículo e imagen del SOAT.</p>
+                <p style="margin: 0 0 5px 0; font-size: 11px; color: #1f2937;"><strong>🕒 Tiempo de almacenamiento:</strong> El tiempo necesario para cumplir con las finalidades descritas y obligaciones legales vigentes.</p>
+                <p style="margin: 0; font-size: 11px; color: #1f2937;"><strong>✅ Derechos del titular:</strong> Acceder, rectificar, cancelar, oponerse y revocar la autorización (Derechos ARCO). Para ejercerlos, escriba a <strong>notificaciones@clinicasanrafael.com</strong></p>
+            </div>
+            <p style="font-size: 10px; color: #6b7280; text-align: justify; margin: 0;">
+                Al marcar la casilla de aceptación a continuación, el titular de la información declara que la información suministrada es verídica, autoriza de manera libre, previa, expresa e informada el tratamiento de sus datos personales, y manifiesta conocer la política de privacidad de la Clínica San Rafael Alta Complejidad SAS.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Checkbox obligatorio para continuar
+        autorizado = st.checkbox("He leído y acepto la Autorización de Tratamiento de Datos Personales de la Clínica San Rafael Alta Complejidad SAS.", key="chk_habeas")
+        # ═══════════════════════════════════════════════════
+
         with st.form("f_dp"):
             ced = st.text_input("🪪 Identificación", key="ced")
             nom = st.text_input("👤 Nombres Completos", key="nom")
@@ -54,6 +84,9 @@ def _paso_2():
             fec = st.date_input("📅 Fecha de Nacimiento", min_value=date(1950,1,1), max_value=date.today(), key="fec")
             if st.form_submit_button("Siguiente →", use_container_width=True):
                 err = []
+                # Validación legal primero que todo
+                if not autorizado: err.append("Debe aceptar la Autorización de Tratamiento de Datos para continuar.")
+                
                 if not ced.strip(): err.append("Identificación obligatoria.")
                 elif not ced.strip().isdigit() or len(ced.strip()) < 6: err.append("Identificación inválida (mín 6 dígitos).")
                 elif db.existe_identificacion(ced.strip()): err.append("Identificación ya registrada.")
