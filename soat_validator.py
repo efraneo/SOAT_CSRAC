@@ -1,20 +1,16 @@
 """
 soat_validator.py
-Validación de imágenes de SOAT usando RapidOCR (No necesita Tesseract en el servidor).
-- Detección de calidad (pixelación / desenfoque)
-- Extracción de texto con OCR
-- Detección de fecha de vencimiento
+Validación de imágenes de SOAT usando RapidOCR y PIL (Sin OpenCV).
 """
 import re
-import cv2
+import io
 import numpy as np
-from datetime import datetime, date
+from PIL import Image
+from datetime import date
 from config import Config
 
 
 class SOATValidator:
-    """Validador de documentos SOAT."""
-
     def __init__(self):
         self.min_quality = Config.MIN_IMAGE_QUALITY_SCORE
         self.min_width = Config.MIN_IMAGE_WIDTH
@@ -24,215 +20,116 @@ class SOATValidator:
 
     @property
     def engine(self):
-        """Inicializa el motor OCR de forma diferida (solo cuando se necesite)."""
         if self._engine is None:
             from rapidocr_onnxruntime import RapidOCR
             self._engine = RapidOCR()
         return self._engine
 
     def validar_archivo(self, archivo_bytes: bytes, nombre_archivo: str) -> dict:
-        """Punto de entrada principal para validar el SOAT."""
-        resultado = {
-            "calidad_ok": False,
-            "calidad_score": 0.0,
-            "calidad_mensaje": "",
-            "texto_extraido": "",
-            "fecha_vencimiento": None,
-            "estado": "No legible",
-            "mensaje_general": ""
-        }
-
-        extensiones_permitidas = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
+        resultado = {"calidad_ok": False, "calidad_score": 0.0, "calidad_mensaje": "", "texto_extraido": "", "fecha_vencimiento": None, "estado": "No legible", "mensaje_general": ""}
         ext = nombre_archivo.lower().rsplit(".", 1)[-1] if "." in nombre_archivo else ""
-        if f".{ext}" not in extensiones_permitidas:
-            resultado["calidad_mensaje"] = (
-                f"El archivo '{nombre_archivo}' no es una imagen válida. "
-                f"Formatos permitidos: JPG, PNG, BMP, TIFF, WEBP"
-            )
+        if f".{ext}" not in {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}:
+            resultado["calidad_mensaje"] = "Formato no válido. Use JPG, PNG, BMP, TIFF o WEBP."
             resultado["mensaje_general"] = resultado["calidad_mensaje"]
             return resultado
-
         try:
-            nparr = np.frombuffer(archivo_bytes, np.uint8)
-            imagen = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            if imagen is None:
-                resultado["calidad_mensaje"] = "No se pudo leer la imagen. El archivo puede estar corrupto."
-                resultado["mensaje_general"] = resultado["calidad_mensaje"]
-                return resultado
+            imagen_pil = Image.open(io.BytesIO(archivo_bytes))
+            if imagen_pil.mode != 'RGB': imagen_pil = imagen_pil.convert('RGB')
         except Exception as e:
-            resultado["calidad_mensaje"] = f"Error al procesar la imagen: {e}"
+            resultado["calidad_mensaje"] = f"Error al leer la imagen: {e}"
             resultado["mensaje_general"] = resultado["calidad_mensaje"]
             return resultado
 
-        # Evaluar calidad
-        calidad = self._evaluar_calidad(imagen)
-        resultado["calidad_score"] = calidad["score"]
-        resultado["calidad_ok"] = calidad["ok"]
-        resultado["calidad_mensaje"] = calidad["mensaje"]
-
+        calidad = self._evaluar_calidad(imagen_pil)
+        resultado["calidad_score"], resultado["calidad_ok"], resultado["calidad_mensaje"] = calidad["score"], calidad["ok"], calidad["mensaje"]
         if not calidad["ok"]:
-            resultado["mensaje_general"] = (
-                f"❌ Imagen no apta: {calidad['mensaje']}. "
-                "Por favor, toma una foto más clara y nítida del SOAT."
-            )
+            resultado["mensaje_general"] = f"❌ Imagen no apta: {calidad['mensaje']}."
             resultado["estado"] = "No legible"
             return resultado
 
-        # Extraer texto
-        texto = self._extraer_texto(imagen)
+        texto = self._extraer_texto(imagen_pil)
         resultado["texto_extraido"] = texto
-
         if not texto or len(texto.strip()) < 15:
             resultado["estado"] = "No legible"
-            resultado["mensaje_general"] = (
-                "❌ No se pudo extraer texto del SOAT. "
-                "Asegúrate de que la imagen sea clara y contenga el documento completo."
-            )
+            resultado["mensaje_general"] = "❌ No se pudo extraer texto del SOAT."
             return resultado
 
-        # Buscar fecha
         fecha_venc = self._buscar_fecha_vencimiento(texto)
         resultado["fecha_vencimiento"] = fecha_venc
-
-        if fecha_venc is None:
+        if not fecha_venc:
             resultado["estado"] = "No legible"
-            resultado["mensaje_general"] = (
-                "⚠️ Se extrajo texto pero no se encontró la fecha de vencimiento del SOAT."
-            )
+            resultado["mensaje_general"] = "⚠️ Se extrajo texto pero no se encontró la fecha de vencimiento."
             return resultado
 
-        # Determinar estado
         estado = self._determinar_estado(fecha_venc)
         resultado["estado"] = estado
         fecha_str = fecha_venc.strftime("%d/%m/%Y")
-        
-        if estado == "Vigente":
-            resultado["mensaje_general"] = f"✅ SOAT VIGENTE. Fecha de vencimiento: {fecha_str}."
-        elif estado == "Por vencer":
-            dias_restantes = (fecha_venc - date.today()).days
-            resultado["mensaje_general"] = f"⚠️ SOAT POR VENCER. Vence el {fecha_str} (faltan {dias_restantes} días)."
-        else:
-            resultado["mensaje_general"] = f"🚨 SOAT VENCIDO. Fecha de vencimiento: {fecha_str}."
-
+        if estado == "Vigente": resultado["mensaje_general"] = f"✅ SOAT VIGENTE. Vence: {fecha_str}."
+        elif estado == "Por vencer": resultado["mensaje_general"] = f"⚠️ SOAT POR VENCER. Vence: {fecha_str} ({(fecha_venc - date.today()).days} días)."
+        else: resultado["mensaje_general"] = f"🚨 SOAT VENCIDO. Venció: {fecha_str}."
         return resultado
 
-    def _evaluar_calidad(self, imagen: np.ndarray) -> dict:
-        """Evalúa la calidad de la imagen usando varianza del Laplaciano y resolución."""
+    def _evaluar_calidad(self, imagen_pil: Image.Image) -> dict:
         resultados = {"score": 0.0, "ok": False, "mensaje": ""}
-        h, w = imagen.shape[:2]
-        
+        w, h = imagen_pil.size
         if w < self.min_width or h < self.min_height:
-            resultados["mensaje"] = f"Resolución muy baja ({w}x{h}). Mínimo: {self.min_width}x{self.min_height}."
+            resultados["mensaje"] = f"Resolución muy baja ({w}x{h})."
             return resultados
-
-        gris = cv2.cvtColor(imagen, cv2.COLOR_BGR2GRAY)
-        varianza = cv2.Laplacian(gris, cv2.CV_64F).var()
-        resultados["score"] = round(varianza, 2)
-
-        if varianza < self.min_quality:
-            resultados["mensaje"] = f"Imagen pixelada o borrosa (índice: {varianza:.1f}, mínimo: {self.min_quality:.1f})."
-            return resultados
-
-        brillo_medio = np.mean(gris)
-        if brillo_medio < 40:
-            resultados["mensaje"] = f"Imagen demasiado oscura (brillo: {brillo_medio:.0f})."
-            return resultados
-        if brillo_medio > 240:
-            resultados["mensaje"] = f"Imagen sobreexpuesta (brillo: {brillo_medio:.0f})."
-            return resultados
-
+        gris_np = np.array(imagen_pil.convert('L'), dtype=np.float64)
+        laplacian = (gris_np[:-2, 1:-1] + gris_np[2:, 1:-1] + gris_np[1:-1, :-2] + gris_np[1:-1, 2:] - 4 * gris_np[1:-1, 1:-1])
+        varianza = np.var(laplacian)
+        score = round(varianza, 2)
+        resultados["score"] = score
+        if varianza < self.min_quality: resultados["mensaje"] = f"Imagen borrosa (índice: {score})."; return resultados
+        brillo = np.mean(gris_np)
+        if brillo < 40: resultados["mensaje"] = "Imagen demasiado oscura."; return resultados
+        if brillo > 240: resultados["mensaje"] = "Imagen sobreexpuesta."; return resultados
         resultados["ok"] = True
-        resultados["mensaje"] = f"Calidad aceptable (nitidez: {varianza:.1f}, resolución: {w}x{h})."
+        resultados["mensaje"] = f"Calidad aceptable (nitidez: {score})."
         return resultados
 
-    def _extraer_texto(self, imagen: np.ndarray) -> str:
-        """Extrae texto usando RapidOCR."""
+    def _extraer_texto(self, imagen_pil: Image.Image) -> str:
         try:
-            # RapidOCR recibe imagen BGR de OpenCV directamente
-            resultados, _ = self.engine(imagen)
-            if not resultados:
-                return ""
-            
-            # Unir todos los textos detectados, filtrando los de baja confianza
-            textos = [txt for (_, txt, conf) in resultados if conf > 0.4]
-            return " ".join(textos).strip()
+            resultados, _ = self.engine(imagen_pil)
+            if not resultados: return ""
+            return " ".join([txt for (_, txt, conf) in resultados if conf > 0.4]).strip()
         except Exception as e:
-            print(f"Error en OCR: {e}")
-            return ""
+            print(f"Error en OCR: {e}"); return ""
 
     def _buscar_fecha_vencimiento(self, texto: str) -> date | None:
-        """Busca la fecha de vencimiento del SOAT en el texto."""
         texto_upper = texto.upper()
-        keywords = [
-            "VENCIMIENTO", "VIGENCIA", "EXPIRA", "FECHA DE VENC",
-            "VENCE", "VALIDO HASTA", "VIGENTE HASTA", "HASTA",
-            "FIN DE VIGENCIA", "TERMINO", "VTO"
-        ]
-
-        for kw in keywords:
+        for kw in ["VENCIMIENTO", "VIGENCIA", "EXPIRA", "FECHA DE VENC", "VENCE", "VALIDO HASTA", "VIGENTE HASTA", "HASTA", "FIN DE VIGENCIA", "TERMINO", "VTO"]:
             idx = texto_upper.find(kw)
             if idx != -1:
-                ventana = texto[idx:idx + 80]
-                fecha = self._extraer_fecha_de_texto(ventana)
-                if fecha:
-                    return fecha
-
-        todas_fechas = self._extraer_todas_fechas(texto)
-        if todas_fechas:
-            todas_fechas.sort(reverse=True)
-            return todas_fechas[0]
-
-        return None
+                fecha = self._extraer_fecha_de_texto(texto[idx:idx+80])
+                if fecha: return fecha
+        todas = self._extraer_todas_fechas(texto)
+        return sorted(todas, reverse=True)[0] if todas else None
 
     def _extraer_fecha_de_texto(self, texto: str) -> date | None:
-        """Intenta extraer una fecha de un fragmento de texto."""
-        pat1 = r'(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})'
-        match = re.search(pat1, texto)
-        if match:
-            try:
-                dia, mes, anio = int(match.group(1)), int(match.group(2)), int(match.group(3))
-                if 1 <= dia <= 31 and 1 <= mes <= 12 and 2000 <= anio <= 2035:
-                    return date(anio, mes, dia)
-            except ValueError:
-                pass
-
-        pat2 = r'(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})'
-        match = re.search(pat2, texto)
-        if match:
-            try:
-                anio, mes, dia = int(match.group(1)), int(match.group(2)), int(match.group(3))
-                if 1 <= dia <= 31 and 1 <= mes <= 12 and 2000 <= anio <= 2035:
-                    return date(anio, mes, dia)
-            except ValueError:
-                pass
+        for pat in [r'(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})', r'(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})']:
+            m = re.search(pat, texto)
+            if m:
+                try:
+                    nums = [int(x) for x in m.groups()]
+                    d, mo, y = (nums[2], nums[1], nums[0]) if len(m.group(1)) == 4 else (nums[0], nums[1], nums[2])
+                    if 1 <= d <= 31 and 1 <= mo <= 12 and 2000 <= y <= 2035: return date(y, mo, d)
+                except: pass
         return None
 
     def _extraer_todas_fechas(self, texto: str) -> list:
-        """Extrae todas las fechas válidas del texto."""
         fechas = []
-        for match in re.finditer(r'(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})', texto):
-            try:
-                dia, mes, anio = int(match.group(1)), int(match.group(2)), int(match.group(3))
-                if 1 <= dia <= 31 and 1 <= mes <= 12 and 2000 <= anio <= 2035:
-                    fechas.append(date(anio, mes, dia))
-            except ValueError:
-                pass
-
-        for match in re.finditer(r'(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})', texto):
-            try:
-                anio, mes, dia = int(match.group(1)), int(match.group(2)), int(match.group(3))
-                if 1 <= dia <= 31 and 1 <= mes <= 12 and 2000 <= anio <= 2035:
-                    fechas.append(date(anio, mes, dia))
-            except ValueError:
-                pass
+        for pat in [r'(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})', r'(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})']:
+            for m in re.finditer(pat, texto):
+                try:
+                    nums = [int(x) for x in m.groups()]
+                    d, mo, y = (nums[2], nums[1], nums[0]) if len(m.group(1)) == 4 else (nums[0], nums[1], nums[2])
+                    if 1 <= d <= 31 and 1 <= mo <= 12 and 2000 <= y <= 2035: fechas.append(date(y, mo, d))
+                except: pass
         return fechas
 
     def _determinar_estado(self, fecha_vencimiento: date) -> str:
-        """Determina el estado del SOAT."""
-        diferencia = (fecha_vencimiento - date.today()).days
-        if diferencia < 0:
-            return "Vencido"
-        elif diferencia <= self.dias_alerta:
-            return "Por vencer"
-        else:
-            return "Vigente"
+        diff = (fecha_vencimiento - date.today()).days
+        if diff < 0: return "Vencido"
+        if diff <= self.dias_alerta: return "Por vencer"
+        return "Vigente"
