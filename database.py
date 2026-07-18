@@ -4,7 +4,6 @@ Operaciones de base de datos con Supabase.
 Maneja trabajadores, códigos 2FA y almacenamiento de archivos.
 """
 import uuid
-import base64
 from datetime import datetime, timezone
 from supabase import create_client, Client
 from config import Config
@@ -57,7 +56,6 @@ class Database:
             )
 
             if response.data:
-                # Marcar como verificado
                 registro_id = response.data[0]["id"]
                 self.client.table("codigos_2fa").update(
                     {"verificado": True}
@@ -131,12 +129,13 @@ class Database:
         """
         try:
             # Generar nombre único para evitar colisiones
-            extension = nombre_archivo.rsplit(".", 1)[-1] if "." in nombre_archivo else "pdf"
+            extension = nombre_archivo.rsplit(".", 1)[-1] if "." in nombre_archivo else "jpg"
             nombre_unico = f"{uuid.uuid4().hex}_{nombre_archivo}"
 
+            # CORRECCIÓN: Usar 'path' y 'file' (nueva sintaxis de supabase-py v2)
             self.client.storage.from_(Config.SOAT_STORAGE_BUCKET).upload(
-                name=nombre_unico,
-                data=archivo_bytes,
+                path=nombre_unico,
+                file=archivo_bytes,
                 file_options={"content-type": "application/octet-stream"}
             )
 
@@ -179,29 +178,18 @@ class Database:
             return []
 
     def obtener_indicadores(self) -> dict:
-        """
-        Genera todos los indicadores/KPIs para el panel administrativo.
-        """
+        """Genera todos los indicadores/KPIs para el panel administrativo."""
         try:
             todos = self.obtener_todos_trabajadores()
 
             if not todos:
                 return {
-                    "total": 0,
-                    "vigentes": 0,
-                    "vencidos": 0,
-                    "por_vencer": 0,
-                    "no_legibles": 0,
-                    "pendientes": 0,
-                    "pct_vigentes": 0,
-                    "pct_vencidos": 0,
-                    "pct_por_vencer": 0,
-                    "pct_no_legibles": 0,
-                    "por_tipo_vehiculo": {},
-                    "por_cargo": {},
-                    "por_mes": {},
-                    "ultimos_registros": [],
-                    "alertas": []
+                    "total": 0, "vigentes": 0, "vencidos": 0,
+                    "por_vencer": 0, "no_legibles": 0, "pendientes": 0,
+                    "pct_vigentes": 0, "pct_vencidos": 0,
+                    "pct_por_vencer": 0, "pct_no_legibles": 0,
+                    "por_tipo_vehiculo": {}, "por_cargo": {},
+                    "por_mes": {}, "ultimos_registros": [], "alertas": []
                 }
 
             total = len(todos)
@@ -211,25 +199,21 @@ class Database:
             no_legibles = [t for t in todos if t["soat_estado"] == "No legible"]
             pendientes = [t for t in todos if t["soat_estado"] == "Pendiente"]
 
-            # Porcentajes
             pct_vigentes = round(len(vigentes) / total * 100, 1) if total else 0
             pct_vencidos = round(len(vencidos) / total * 100, 1) if total else 0
             pct_por_vencer = round(len(por_vencer) / total * 100, 1) if total else 0
             pct_no_legibles = round(len(no_legibles) / total * 100, 1) if total else 0
 
-            # Distribución por tipo de vehículo
             por_tipo = {}
             for t in todos:
                 tv = t.get("tipo_vehiculo", "Sin dato")
                 por_tipo[tv] = por_tipo.get(tv, 0) + 1
 
-            # Distribución por cargo
             por_cargo = {}
             for t in todos:
                 cargo = t.get("cargo", "Sin dato")
                 por_cargo[cargo] = por_cargo.get(cargo, 0) + 1
 
-            # Registros por mes (últimos 6 meses)
             por_mes = {}
             for t in todos:
                 if t.get("fecha_registro"):
@@ -240,49 +224,28 @@ class Database:
                     except Exception:
                         pass
 
-            # Ordenar por mes
             por_mes = dict(sorted(por_mes.items(), reverse=True)[:6])
-
-            # Últimos 10 registros
             ultimos = todos[:10]
 
-            # Alertas
             alertas = []
             for t in vencidos:
-                alertas.append({
-                    "tipo": "danger",
-                    "icono": "🚨",
-                    "mensaje": f"SOAT VENCIDO - {t['nombres']} ({t['identificacion']}) - Placa: {t['placa']}"
-                })
+                alertas.append({"tipo": "danger", "icono": "🚨",
+                    "mensaje": f"SOAT VENCIDO - {t['nombres']} ({t['identificacion']}) - Placa: {t['placa']}"})
             for t in por_vencer:
-                alertas.append({
-                    "tipo": "warning",
-                    "icono": "⚠️",
-                    "mensaje": f"SOAT POR VENCER - {t['nombres']} ({t['identificacion']}) - Placa: {t['placa']}"
-                })
+                alertas.append({"tipo": "warning", "icono": "⚠️",
+                    "mensaje": f"SOAT POR VENCER - {t['nombres']} ({t['identificacion']}) - Placa: {t['placa']}"})
             for t in no_legibles:
-                alertas.append({
-                    "tipo": "info",
-                    "icono": "📷",
-                    "mensaje": f"SOAT NO LEGIBLE - {t['nombres']} ({t['identificacion']}) - Requiere nuevo archivo"
-                })
+                alertas.append({"tipo": "info", "icono": "📷",
+                    "mensaje": f"SOAT NO LEGIBLE - {t['nombres']} ({t['identificacion']}) - Requiere nuevo archivo"})
 
             return {
-                "total": total,
-                "vigentes": len(vigentes),
-                "vencidos": len(vencidos),
-                "por_vencer": len(por_vencer),
-                "no_legibles": len(no_legibles),
-                "pendientes": len(pendientes),
-                "pct_vigentes": pct_vigentes,
-                "pct_vencidos": pct_vencidos,
-                "pct_por_vencer": pct_por_vencer,
-                "pct_no_legibles": pct_no_legibles,
-                "por_tipo_vehiculo": por_tipo,
-                "por_cargo": por_cargo,
-                "por_mes": por_mes,
-                "ultimos_registros": ultimos,
-                "alertas": alertas
+                "total": total, "vigentes": len(vigentes), "vencidos": len(vencidos),
+                "por_vencer": len(por_vencer), "no_legibles": len(no_legibles),
+                "pendientes": len(pendientes), "pct_vigentes": pct_vigentes,
+                "pct_vencidos": pct_vencidos, "pct_por_vencer": pct_por_vencer,
+                "pct_no_legibles": pct_no_legibles, "por_tipo_vehiculo": por_tipo,
+                "por_cargo": por_cargo, "por_mes": por_mes,
+                "ultimos_registros": ultimos, "alertas": alertas
             }
 
         except Exception as e:
