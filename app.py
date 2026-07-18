@@ -2,28 +2,6 @@
 app.py
 Punto de entrada de la aplicación — Orquestador de pantallas.
 """
-import subprocess
-import os
-
-# ═══════════════════════════════════════════════════════════
-#  INSTALAR TESSERACT EN STREAMLIT CLOUD (solo si no existe)
-# ═══════════════════════════════════════════════════════════
-_tesseract_path = "/usr/bin/tesseract"
-if not os.path.exists(_tesseract_path):
-    print("🔧 Instalando Tesseract OCR en el servidor...")
-    try:
-        subprocess.run(["apt-get", "update"], capture_output=True, check=True)
-        subprocess.run(
-            ["apt-get", "install", "-y", "tesseract-ocr", "tesseract-ocr-spa"],
-            capture_output=True, check=True
-        )
-        print("✅ Tesseract instalado correctamente.")
-    except Exception as e:
-        print(f"⚠️ No se pudo instalar Tesseract: {e}")
-
-# ═══════════════════════════════════════════════════════════
-#  IMPORTACIONES Y CONFIGURACIÓN
-# ═══════════════════════════════════════════════════════════
 import streamlit as st
 from config import Config
 from styles import cargar_estilos

@@ -1,6 +1,6 @@
 """
 config.py
-Carga de configuración desde Streamlit Secrets (nube) o .env (local).
+Carga de configuración desde Streamlit Secrets (nube) o claves_soat.env (local).
 """
 import os
 from dotenv import load_dotenv
@@ -24,8 +24,7 @@ def _obtener(clave: str, por_defecto: str = "") -> str:
     except Exception:
         pass
 
-    valor = os.getenv(clave, por_defecto)
-    return valor
+    return os.getenv(clave, por_defecto)
 
 
 class Config:
@@ -43,8 +42,8 @@ class Config:
     EMAIL_FROM_NAME: str = _obtener("EMAIL_FROM_NAME", "Sistema SOAT")
 
     # ── Administrador ──
-    ADMIN_EMAIL: str = _obtener("ADMIN_EMAIL", "admin@empresa.com")
-    ADMIN_PASSWORD: str = _obtener("ADMIN_PASSWORD", "admin123")
+    ADMIN_EMAIL: str = _obtener("ADMIN_EMAIL", "efraneo@gmail.com")
+    ADMIN_PASSWORD: str = _obtener("ADMIN_PASSWORD", "dasb1512")
 
     # ── 2FA ──
     TWO_FACTOR_EXPIRY_SECONDS: int = int(_obtener("TWO_FACTOR_EXPIRY_SECONDS", "300"))
@@ -60,9 +59,6 @@ class Config:
 
     # ── Tipos de vehículo ──
     TIPOS_VEHICULO: list = ["Automovil", "Motocicleta"]
-
-    # ── Tesseract ──
-    TESSERACT_CMD: str = _obtener("TESSERACT_CMD", "")
 
     @classmethod
     def validar(cls) -> bool:
