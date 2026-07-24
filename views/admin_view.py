@@ -70,7 +70,8 @@ def mostrar():
                         new_tv = st.selectbox("🏷️ Tipo", ["Automovil", "Motocicleta"], index=0 if current.get("tipo_vehiculo") == "Automovil" else 1)
                     if st.form_submit_button("💾 Guardar", use_container_width=True):
                         datos = {"nombres": new_nom, "cargo": new_car, "placa": new_placa.upper(), "tipo_vehiculo": new_tv}
-                        res = db.actualizar_trabajar(id_buscar, datos)
+                        # CORREGIDO: actualizar_trabajar -> actualizar_trabajador
+                        res = db.actualizar_trabajador(id_buscar, datos)
                         if res["exito"]:
                             st.success("✅ Actualizado.")
                             st.rerun()
@@ -78,7 +79,8 @@ def mostrar():
                             st.error(f"Error: {res['mensaje']}")
 
             with tab2:
-                st.markdown(f"Estado actual: **{current.get('soat_estado', 'Pendiente'}**")
+                # CORREGIDO: SyntaxError del paréntesis
+                st.markdown(f"Estado actual: **{current.get('soat_estado', 'Pendiente')}**")
                 with st.form("f_estado"):
                     nuevo_estado = st.selectbox("Nuevo Estado:", ["Vigente", "Por vencer", "Vencido", "No legible", "Pendiente"], key="nuevo_estado")
                     if st.form_submit_button("🔄 Actualizar Estado", use_container_width=True, type="primary"):
@@ -107,7 +109,8 @@ def mostrar():
                     if st.button("🔄 Subir y Analizar", use_container_width=True, type="primary"):
                         with st.spinner("🔄 Procesando con IA..."):
                             bytes_img = nuevo_img.read()
-                            res = db.actualizar_trabajar(id_buscar, {}, bytes_img, nuevo_img.name)
+                            # CORREGIDO: actualizar_trabajar -> actualizar_trabajador
+                            res = db.actualizar_trabajador(id_buscar, {}, bytes_img, nuevo_img.name)
                             if res["exito"]:
                                 st.success("✅ Soporte actualizado.")
                                 st.rerun()
@@ -117,7 +120,8 @@ def mostrar():
             with tab4:
                 st.warning("Acción irreversible.")
                 if st.button("⚠️ Eliminar", type="primary"):
-                    if db.eliminar_trabajor(id_buscar):
+                    # CORREGIDO: eliminar_trabajor -> eliminar_trabajador
+                    if db.eliminar_trabajador(id_buscar):
                         st.success("Eliminado.")
                         st.rerun()
                     else:
@@ -177,7 +181,7 @@ def _mostrar_tabla():
                 ("background-color: #ffcdd2; color: #c62828; font-weight: 600" if v == "Vencido" else
                 ("background-color: #e1bee7; color: #6a1b9a; font-weight: 600" if v == "No legible" else
                 "background-color: #e0e0e0; color: #616161; font-weight: 600")
-        ),
+        )),
         subset=["Estado SOAT"],
         use_container_width=True, height=400, hide_index=True
     )
