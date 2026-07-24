@@ -70,7 +70,6 @@ def mostrar():
                         new_tv = st.selectbox("🏷️ Tipo", ["Automovil", "Motocicleta"], index=0 if current.get("tipo_vehiculo") == "Automovil" else 1)
                     if st.form_submit_button("💾 Guardar", use_container_width=True):
                         datos = {"nombres": new_nom, "cargo": new_car, "placa": new_placa.upper(), "tipo_vehiculo": new_tv}
-                        # CORREGIDO: actualizar_trabajar -> actualizar_trabajador
                         res = db.actualizar_trabajador(id_buscar, datos)
                         if res["exito"]:
                             st.success("✅ Actualizado.")
@@ -79,7 +78,6 @@ def mostrar():
                             st.error(f"Error: {res['mensaje']}")
 
             with tab2:
-                # CORREGIDO: SyntaxError del paréntesis
                 st.markdown(f"Estado actual: **{current.get('soat_estado', 'Pendiente')}**")
                 with st.form("f_estado"):
                     nuevo_estado = st.selectbox("Nuevo Estado:", ["Vigente", "Por vencer", "Vencido", "No legible", "Pendiente"], key="nuevo_estado")
@@ -109,7 +107,6 @@ def mostrar():
                     if st.button("🔄 Subir y Analizar", use_container_width=True, type="primary"):
                         with st.spinner("🔄 Procesando con IA..."):
                             bytes_img = nuevo_img.read()
-                            # CORREGIDO: actualizar_trabajar -> actualizar_trabajador
                             res = db.actualizar_trabajador(id_buscar, {}, bytes_img, nuevo_img.name)
                             if res["exito"]:
                                 st.success("✅ Soporte actualizado.")
@@ -120,7 +117,6 @@ def mostrar():
             with tab4:
                 st.warning("Acción irreversible.")
                 if st.button("⚠️ Eliminar", type="primary"):
-                    # CORREGIDO: eliminar_trabajor -> eliminar_trabajador
                     if db.eliminar_trabajador(id_buscar):
                         st.success("Eliminado.")
                         st.rerun()
@@ -156,6 +152,18 @@ def _mostrar_graficos(ind):
         fig.update_layout(margin=dict(t=20, b=40, l=40, r=20), height=250)
         st.plotly_chart(fig, use_container_width=True)
 
+def _color_estado(val):
+    """Función auxiliar para pintar las celdas del estado del SOAT en la tabla."""
+    if val == "Vigente":
+        return "background-color: #c8e6c9; color: #1b5e20; font-weight:600"
+    elif val == "Por vencer":
+        return "background-color: #fff9c4; color: #f57f17; font-weight: 600"
+    elif val == "Vencido":
+        return "background-color: #ffcdd2; color: #c62828; font-weight: 600"
+    elif val == "No legible":
+        return "background-color: #e1bee7; color: #6a1b9a; font-weight: 600"
+    return "background-color: #e0e0e0; color: #616161; font-weight: 600"
+
 def _mostrar_tabla():
     todos = db.obtener_todos_trabajadores()
     if not todos:
@@ -174,14 +182,8 @@ def _mostrar_tabla():
         df[c] = df[c].apply(lambda x: str(x)[:10] if pd.notna(x) else "N/A")
     
     st.dataframe(
-        df.style.map(
-            lambda v:
-                "background-color: #c8e6c9; color: #1b5e20; font-weight:600" if v == "Vigente" else
-                ("background-color: #fff9c4; color: #f57f17; font-weight: 600" if v == "Por vencer" else
-                ("background-color: #ffcdd2; color: #c62828; font-weight: 600" if v == "Vencido" else
-                ("background-color: #e1bee7; color: #6a1b9a; font-weight: 600" if v == "No legible" else
-                "background-color: #e0e0e0; color: #616161; font-weight: 600")
-        )),
-        subset=["Estado SOAT"],
-        use_container_width=True, height=400, hide_index=True
+        df.style.map(_color_estado, subset=["Estado SOAT"]),
+        use_container_width=True, 
+        height=400, 
+        hide_index=True
     )
