@@ -1,9 +1,11 @@
 """
 soat_validator.py
-Validación mejorada: Acepta PDFs y no rechaza SOATs válidos por pixeles.
+Validación de SOAT usando IA avanzada (OpenAI GPT-4o-mini).
+Ignora logos, lee fechas borrosas y entiende el formato FOSFEC colombiano.
 """
 import re
 import io
+import base64
 import numpy as np
 from PIL import Image
 from datetime import date
@@ -15,28 +17,24 @@ class SOATValidator:
         self.min_width = Config.MIN_IMAGE_WIDTH
         self.min_height = Config.MIN_IMAGE_HEIGHT
         self.dias_alerta = Config.SOAT_ALERTA_DIAS
-        self._engine = None
-
-    @property
-    def engine(self):
-        if self._engine is None:
-            from rapidocr_onnxruntime import RapidOCR
-            self._engine = RapidOCR()
-        return self._engine
 
     def validar_archivo(self, archivo_bytes: bytes, nombre_archivo: str) -> dict:
-        resultado = {"calidad_ok": False, "calidad_score": 0.0, "calidad_mensaje": "", "texto_extraido": "", "fecha_vencimiento": None, "estado": "No legible", "mensaje_general": ""}
+        resultado = {
+            "calidad_ok": False, "calidad_score": 0.0, "calidad_mensaje": "",
+            "texto_extraido": "", "fecha_vencimiento": None, 
+            "estado": "No legible", "mensaje_general": ""
+        }
         
         ext = nombre_archivo.lower().rsplit(".", 1)[-1] if "." in nombre_archivo else ""
         
         # 1. Convertir PDF a Imagen si es necesario
         if ext == "pdf":
             try:
-                import fitz  # PyMuPDF
+                import fitz
                 doc = fitz.open(stream=archivo_bytes, filetype="pdf")
                 if len(doc) > 0:
                     page = doc.load_page(0)
-                    pix = page.get_pixmap(dpi=250) # Alta resolución para el OCR
+                    pix = page.get_pixmap(dpi=250) # Alta resolución para la IA
                     archivo_bytes = pix.tobytes("png")
                     nombre_archivo = "soat_convertido.png"
                 doc.close()
@@ -59,46 +57,42 @@ class SOATValidator:
             resultado["mensaje_general"] = resultado["calidad_mensaje"]
             return resultado
 
-        # 3. Evaluar calidad
+        # 3. Evaluar calidad básica (para rechazar fotos completamente negras/blancas)
         calidad = self._evaluar_calidad(imagen_pil)
-        resultado["calidad_score"], resultado["calidad_ok"], resultado["calidad_mensaje"] = calidad["score"], calidad["ok"], calidad["mensaje"]
+        resultado["calidad_score"] = calidad["score"]
+        resultado["calidad_ok"] = calidad["ok"]
+        resultado["calidad_mensaje"] = calidad["mensaje"]
         
-        # 4. Si la calidad es pésima (texto ilegible), sí se bloquea
         if not calidad["ok"]:
             resultado["estado"] = "No legible"
             resultado["mensaje_general"] = f"❌ Imagen no apta: {calidad['mensaje']}."
             return resultado
 
-        # 5. Extraer texto
-        texto = self._extraer_texto(imagen_pil)
-        resultado["texto_extraido"] = texto
-
-        # 6. Buscar fecha
-        fecha_venc = self._buscar_fecha_vencimiento(texto)
+        # 4. Usar IA (GPT-4o-mini) para leer el SOAT
+        fecha_venc = self._leer_fecha_con_ia(archivo_bytes)
         resultado["fecha_vencimiento"] = fecha_venc
         
-        # 7. LÓGICA INTELIGENTE: Si la calidad es buena pero no encuentro fecha -> PENDIENTE (NO RECHAZAR)
         if not fecha_venc:
-            if len(texto.strip()) > 30:
-                resultado["estado"] = "Pendiente"
-                resultado["mensaje_general"] = "⚠️ Imagen recibida. El sistema no pudo leer la fecha de vencimiento automáticamente, pero el soporte fue adjuntado correctamente. Un administrador lo validará pronto."
-            else:
-                resultado["estado"] = "No legible"
-                resultado["mensaje_general"] = "❌ Imagen muy oscura o sin texto legible. Por favor, toma una foto más centrada al SOAT."
+            resultado["estado"] = "Pendiente"
+            resultado["mensaje_general"] = "⚠️ La IA no pudo identificar la fecha en el soporte. Tu registro ha quedado guardado y un administrador lo validará manualmente."
             return resultado
 
-        # 8. Si encontró fecha, determinar estado
+        # 5. Determinar estado
         estado = self._determinar_estado(fecha_venc)
         resultado["estado"] = estado
         fecha_str = fecha_venc.strftime("%d/%m/%Y")
         
-        if estado == "Vigente": resultado["mensaje_general"] = f"✅ SOAT VIGENTE. Vence: {fecha_str}."
-        elif estado == "Por vencer": resultado["mensaje_general"] = f"⚠️ POR VENCER. Vence: {fecha_str} ({(fecha_venc - date.today()).days} días)."
-        else: resultado["mensaje_general"] = f"🚨 SOAT VENCIDO. Venció: {fecha_str}."
+        if estado == "Vigente":
+            resultado["mensaje_general"] = f"✅ SOAT VIGENTE. Vence: {fecha_str}."
+        elif estado == "Por vencer":
+            resultado["mensaje_general"] = f"⚠️ POR VENCER. Vence el {fecha_str} ({(fecha_venc - date.today()).days} días)."
+        else:
+            resultado["mensaje_general"] = f"🚨 SOAT VENCIDO. Venció el {fecha_str}."
         
         return resultado
 
     def _evaluar_calidad(self, imagen_pil: Image.Image) -> dict:
+        """Revisa que la imagen no sea un archivo vacío o completamente negro/blanco."""
         resultados = {"score": 0.0, "ok": False, "mensaje": ""}
         w, h = imagen_pil.size
         if w < self.min_width or h < self.min_height:
@@ -106,7 +100,11 @@ class SOATValidator:
             return resultados
         
         gris_np = np.array(imagen_pil.convert('L'), dtype=np.float64)
-        laplacian = (gris_np[:-2, 1:-1] + gris_np[2:, 1:-1] + gris_np[1:-1, :-2] + gris_np[1:-1, 2:] - 4 * gris_np[1:-1, 1:-1])
+        laplacian = (
+            gris_np[:-2, 1:-1] + gris_np[2:, 1:-1] + 
+            gris_np[1:-1, :-2] + gris_np[1:-1, 2:] - 
+            4 * gris_np[1:-1, 1:-1]
+        )
         varianza = np.var(laplacian)
         score = round(varianza, 2)
         resultados["score"] = score
@@ -127,46 +125,74 @@ class SOATValidator:
         resultados["mensaje"] = f"Calidad OK (nitidez: {score})."
         return resultados
 
-    def _extraer_texto(self, imagen_pil: Image.Image) -> str:
+    def _leer_fecha_con_ia(self, archivo_bytes: bytes) -> date | None:
+        """Usa GPT-4o-mini para encontrar la fecha de vencimiento del SOAT."""
         try:
-            resultados, _ = self.engine(imagen_pil)
-            if not resultados: return ""
-            # Bajar confianza a 0.25 para no perder datos válidos
-            return " ".join([txt for (_, txt, conf) in resultados if conf > 0.25]).strip()
+            import openai
+            client = openai.OpenAI(api_key=Config.OPENAI_API_KEY)
+            
+            b64_image = base64.b64encode(archivo_bytes).decode("utf-8")
+            
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Eres un experto leyendo documentos de tránsito colombianos, específicamente SOAT / FOSFEC. "
+                                "Tu ÚNICA misión es encontrar la fecha de vencimiento.\n\n"
+                                "BUSCA palabras clave: VIGENCIA, EXPIRA, VENCIMIENTO, VTO, HASTA.\n"
+                                "Si encuentras la fecha, devuélvela SOLO en formato AAAA-MM-DD. NADA MÁS.\n"
+                                "Si NO logras identificar la fecha con seguridad, devuelve EXACTAMENTE la palabra: NO_ENCONTRADA"
+                            )
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{b64_image}",
+                                "detail": "high"
+                            }
+                        }
+                    ]
+                }],
+                max_tokens=15
+            )
+            
+            texto_respuesta = response.choices[0].message.content.strip().upper()
+            
+            if texto_respuesta == "NO_ENCONTRADA":
+                return None
+            
+            # Limpiar respuesta y buscar fecha
+            texto_limpio = re.sub(r'[^0-9\-\/]', '', texto_respuesta)
+            
+            # Buscar AAAA-MM-DD
+            match = re.search(r'(\d{4})-(\d{2})-(\d{2})', texto_limpio)
+            if match:
+                try:
+                    anio, mes, dia = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                    if 2000 <= anio <= 2035 and 1 <= mes <= 12 and 1 <= dia <= 31:
+                        return date(anio, mes, dia)
+                except ValueError:
+                    pass
+            
+            # Buscar DD-MM-AAAA o DD/MM/AAAA
+            match = re.search(r'(\d{1,2})[/\-\.](\d{1,2})[/\-\.](\d{4})', texto_limpio)
+            if match:
+                try:
+                    dia, mes, anio = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                    if 2000 <= anio <= 2035 and 1 <= mes <= 12 and 1 <= dia <= 31:
+                        return date(anio, mes, dia)
+                except ValueError:
+                    pass
+            
+            return None
+            
         except Exception as e:
-            print(f"Error en OCR: {e}"); return ""
-
-    def _buscar_fecha_vencimiento(self, texto: str) -> date | None:
-        texto_upper = texto.upper()
-        for kw in ["VENCIMIENTO", "VIGENCIA", "EXPIRA", "FECHA DE VENC", "VENCE", "VALIDO HASTA", "VIGENTE HASTA", "HASTA", "FIN DE VIGENCIA", "TERMINO", "VTO"]:
-            idx = texto_upper.find(kw)
-            if idx != -1:
-                fecha = self._extraer_fecha_de_texto(texto[idx:idx+100])
-                if fecha: return fecha
-        todas = self._extraer_todas_fechas(texto)
-        return sorted(todas, reverse=True)[0] if todas else None
-
-    def _extraer_fecha_de_texto(self, texto: str) -> date | None:
-        for pat in [r'(\d{1,2})[/\-\.](\d{1,2})[/\-\.](\d{4})', r'(\d{4})[/\-\.](\d{1,2})[/\-\.](\d{1,2})']:
-            m = re.search(pat, texto)
-            if m:
-                try:
-                    nums = [int(x) for x in m.groups()]
-                    d, mo, y = (nums[2], nums[1], nums[0]) if len(m.group(1)) == 4 else (nums[0], nums[1], nums[2])
-                    if 1 <= d <= 31 and 1 <= mo <= 12 and 2000 <= y <= 2035: return date(y, mo, d)
-                except: pass
-        return None
-
-    def _extraer_todas_fechas(self, texto: str) -> list:
-        fechas = []
-        for pat in [r'(\d{1,2})[/\-\.](\d{1,2})[/\-\.](\d{4})', r'(\d{4})[/\-\.](\d{1,2})[/\-\.](\d{1,2})']:
-            for m in re.finditer(pat, texto):
-                try:
-                    nums = [int(x) for x in m.groups()]
-                    d, mo, y = (nums[2], nums[1], nums[0]) if len(m.group(1)) == 4 else (nums[0], nums[1], nums[2])
-                    if 1 <= d <= 31 and 1 <= mo <= 12 and 2000 <= y <= 2035: fechas.append(date(y, mo, d))
-                except: pass
-        return fechas
+            print(f"Error con IA para leer SOAT: {e}")
+            return None
 
     def _determinar_estado(self, fecha_vencimiento: date) -> str:
         diff = (fecha_vencimiento - date.today()).days
