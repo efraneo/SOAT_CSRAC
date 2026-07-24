@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from utils import db, mostrar_alerta, mostrar_metrica_card
+from utils import db, mostrar_alerta, mostrar_metrica_card, soat_validator
 
 def mostrar():
     c1, c2 = st.columns(2)
@@ -18,8 +18,9 @@ def mostrar():
     st.markdown("""<div class="main-title"><h1>📊 Panel Admin</h1></div>""", unsafe_allow_html=True)
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-    with st.spinner("Cargando..."):
+    with st.spinner("Cargando datos..."):
         ind = db.obtener_indicadores()
+        todos_trab = db.obtener_todos_trabajadores()
 
     st.markdown("### 📈 Indicadores")
     cols = st.columns(6)
@@ -48,84 +49,154 @@ def mostrar():
         st.info("📭 Sin ingresos hoy.")
 
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-    st.markdown("### ✏️ Gestión por ID")
-    id_buscar = st.text_input("🔑 Digite el ID:", placeholder="Pégalo de la tabla de abajo...", key="id_gestion")
+    
+    # ═══════════════════════════════════════════════════
+    # SECCIÓN DE GESTIÓN COMPLETA (NUEVA)
+    # ═══════════════════════════════════════════════════
+    st.markdown("### ✏️ Gestión de Trabajadores")
+    
+    if not todos_trab:
+        st.info("No hay trabajadores registrados todavía.")
+    else:
+        # Crear opciones para el selectbox: "Cedula - Nombre (Placa)" -> id (UUID)
+        opciones = {f"{t.get('identificacion', 'N/A')} - {t.get('nombres', 'N/A')} ({t.get('placa', 'N/A')})": t["id"] for t in todos_trab}
+        
+        c1, c2 = st.columns([3, 2])
+        with c1:
+            seleccion = st.selectbox("🔎 Selecciona un trabajador de la lista:", list(opciones.keys()))
+        with c2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            manual_id = st.text_input("O escribe el ID/Cédula manualmente:", placeholder="Opcional...")
 
-    if id_buscar:
-        current = db.obtener_trabajador_por_id(id_buscar)
-        if not current:
-            mostrar_alerta("danger", "ID no encontrado.")
-        else:
-            mostrar_alerta("success", f"Encontrado: {current.get('nombres')} - {current.get('placa')} ({current.get('soat_estado')})")
-            tab1, tab2, tab3, tab4 = st.tabs(["📝 Info", "🔄 Estado", "📄 Soporte", "🗑️ Eliminar"])
+        id_a_buscar = manual_id if manual_id else opciones.get(seleccion)
+        
+        if id_a_buscar:
+            current = db.obtener_trabajador_por_id(id_a_buscar)
+            
+            # Si no encuentra por UUID, intentar buscar por Cédula por si el admin la escribió
+            if not current:
+                encontrados = [t for t in todos_trab if t.get('identificacion') == id_a_buscar]
+                if encontrados:
+                    current = db.obtener_trabajador_por_id(encontrados[0]["id"])
 
-            with tab1:
-                with st.form("f_info"):
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        new_nom = st.text_input("👤 Nombre", value=current.get("nombres", ""))
-                        new_car = st.text_input("💼 Cargo", value=current.get("cargo", ""))
-                    with c2:
-                        new_placa = st.text_input("🚘 Placa", value=current.get("placa", ""))
-                        new_tv = st.selectbox("🏷️ Tipo", ["Automovil", "Motocicleta"], index=0 if current.get("tipo_vehiculo") == "Automovil" else 1)
-                    if st.form_submit_button("💾 Guardar", use_container_width=True):
-                        datos = {"nombres": new_nom, "cargo": new_car, "placa": new_placa.upper(), "tipo_vehiculo": new_tv}
-                        res = db.actualizar_trabajador(id_buscar, datos)
-                        if res["exito"]:
-                            st.success("✅ Actualizado.")
-                            st.rerun()
-                        else:
-                            st.error(f"Error: {res['mensaje']}")
+            if not current:
+                mostrar_alerta("danger", "Trabajador no encontrado. Verifica el ID o Cédula.")
+            else:
+                mostrar_alerta("success", f"Gestionando a: {current.get('nombres')} - Placa: {current.get('placa')}")
+                tab1, tab2, tab3, tab4 = st.tabs(["📝 Editar Info", "🔄 Estado SOAT", "📄 Soporte y Validación IA", "🗑️ Eliminar"])
 
-            with tab2:
-                st.markdown(f"Estado actual: **{current.get('soat_estado', 'Pendiente')}**")
-                with st.form("f_estado"):
-                    nuevo_estado = st.selectbox("Nuevo Estado:", ["Vigente", "Por vencer", "Vencido", "No legible", "Pendiente"], key="nuevo_estado")
-                    if st.form_submit_button("🔄 Actualizar Estado", use_container_width=True, type="primary"):
-                        res = db.actualizar_trabajador(id_buscar, {"soat_estado": nuevo_estado})
-                        if res["exito"]:
-                            st.success(f"✅ Estado actualizado a: {nuevo_estado}")
-                            st.rerun()
-                        else:
-                            st.error(f"Error: {res['mensaje']}")
-
-            with tab3:
-                st.markdown("#### 📄 Soporte Actual")
-                url_actual = current.get("soat_url", "")
-                if url_actual:
-                    if ".pdf" in url_actual:
-                        st.markdown(f"📎 [Ver PDF]({url_actual})")
-                    else:
-                        st.image(url_actual, caption="Soporte actual", width=400)
-                st.markdown("---")
-                nuevo_img = st.file_uploader("📎 Nuevo Soporte (Img/PDF)", type=["jpg", "jpeg", "png", "pdf"], key="img_edit")
-                if nuevo_img:
-                    if nuevo_img.type != "application/pdf":
-                        st.image(nuevo_img, caption="Nuevo archivo", width=400)
-                    else:
-                        mostrar_alerta("success", f"PDF '{nuevo_img.name}' seleccionado.")
-                    if st.button("🔄 Subir y Analizar", use_container_width=True, type="primary"):
-                        with st.spinner("🔄 Procesando con IA..."):
-                            bytes_img = nuevo_img.read()
-                            res = db.actualizar_trabajador(id_buscar, {}, bytes_img, nuevo_img.name)
+                # ─── Pestaña 1: Editar Info ───
+                with tab1:
+                    with st.form("f_info"):
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            new_nom = st.text_input("👤 Nombre", value=current.get("nombres", ""))
+                            new_car = st.text_input("💼 Cargo", value=current.get("cargo", ""))
+                        with c2:
+                            new_placa = st.text_input("🚘 Placa", value=current.get("placa", "")).upper()
+                            new_tv = st.selectbox("🏷️ Tipo Vehículo", ["Automovil", "Motocicleta"], index=0 if current.get("tipo_vehiculo") == "Automovil" else 1)
+                        
+                        if st.form_submit_button("💾 Guardar Cambios", use_container_width=True, type="primary"):
+                            datos = {"nombres": new_nom, "cargo": new_car, "placa": new_placa, "tipo_vehiculo": new_tv}
+                            res = db.actualizar_trabajador(current["id"], datos)
                             if res["exito"]:
-                                st.success("✅ Soporte actualizado.")
+                                st.success("✅ Datos actualizados correctamente.")
                                 st.rerun()
                             else:
                                 st.error(f"Error: {res['mensaje']}")
 
-            with tab4:
-                st.warning("Acción irreversible.")
-                if st.button("⚠️ Eliminar", type="primary"):
-                    if db.eliminar_trabajador(id_buscar):
-                        st.success("Eliminado.")
-                        st.rerun()
+                # ─── Pestaña 2: Estado SOAT y Mensajes ───
+                with tab2:
+                    st.markdown("#### 📊 Estado Actual")
+                    col_e1, col_e2, col_e3 = st.columns(3)
+                    with col_e1:
+                        estado_actual = current.get("soat_estado", "Pendiente")
+                        st.metric("Estado SOAT", estado_actual)
+                    with col_e2:
+                        vigencia = current.get("soat_vigencia")
+                        vig_str = str(vigencia)[:10] if vigencia else "Sin fecha"
+                        st.metric("Vencimiento", vig_str)
+                    with col_e3:
+                        calidad = current.get("soat_calidad_imagen", 0)
+                        st.metric("Calidad Imagen (Score)", round(calidad, 2))
+
+                    st.markdown("---")
+                    st.markdown("#### ⚙️ Forzar Estado Manual")
+                    st.caption("Usa esto si la IA falló o si necesitas corregir un error de validación en la base de datos.")
+                    
+                    with st.form("f_estado"):
+                        opciones_estado = ["Vigente", "Por vencer", "Vencido", "No legible", "Pendiente"]
+                        index_est = opciones_estado.index(estado_actual) if estado_actual in opciones_estado else 4
+                        nuevo_estado = st.selectbox("Forzar Nuevo Estado:", opciones_estado, index=index_est)
+                        
+                        if st.form_submit_button("🔄 Actualizar Estado", use_container_width=True, type="primary"):
+                            res = db.actualizar_trabajador(current["id"], {"soat_estado": nuevo_estado})
+                            if res["exito"]:
+                                st.success(f"✅ Estado forzado a: {nuevo_estado}")
+                                st.rerun()
+                            else:
+                                st.error(f"Error: {res['mensaje']}")
+
+                # ─── Pestaña 3: Soporte y Re-Validación IA ───
+                with tab3:
+                    st.markdown("#### 📄 Soporte Actual")
+                    url_actual = current.get("soat_url", "")
+                    if url_actual:
+                        if ".pdf" in url_actual:
+                            st.markdown(f"📎 [Ver PDF Actual]({url_actual})")
+                        else:
+                            st.image(url_actual, caption="Soporte actual", width=400)
                     else:
-                        st.error("Error al eliminar.")
+                        st.warning("No hay soporte cargado actualmente.")
+                        
+                    st.markdown("---")
+                    st.markdown("#### ⬆️ Subir Nuevo Soporte (Re-Validación con IA)")
+                    nuevo_img = st.file_uploader("Adjunta una nueva imagen o PDF del SOAT", type=["jpg", "jpeg", "png", "pdf"], key="img_edit_admin")
+                    
+                    if nuevo_img:
+                        if nuevo_img.type != "application/pdf":
+                            st.image(nuevo_img, caption="Nuevo archivo a procesar", width=400)
+                        else:
+                            mostrar_alerta("info", f"PDF '{nuevo_img.name}' seleccionado. Listo para analizar.")
+                            
+                        if st.button("🤖 Subir, Analizar con IA y Actualizar", use_container_width=True, type="primary"):
+                            with st.spinner("Analizando el documento con OpenAI Vision..."):
+                                bytes_img = nuevo_img.read()
+                                
+                                # 1. Validamos con la IA localmente para obtener el mensaje
+                                res_soat = soat_validator.validar_archivo(bytes_img, nuevo_img.name)
+                                
+                                # 2. Subimos y actualizamos en Supabase
+                                res_db = db.actualizar_trabajador(current["id"], {}, bytes_img, nuevo_img.name)
+                                
+                                if res_db["exito"]:
+                                    st.success("✅ Soporte actualizado y guardado en la base de datos.")
+                                    # Mostramos el mensaje que devolvió la IA
+                                    if res_soat["calidad_ok"]:
+                                        tipo_alerta = "success" if res_soat["estado"] == "Vigente" else "warning"
+                                        mostrar_alerta(tipo_alerta, f"Resultado IA: {res_soat['mensaje_general']}")
+                                        if res_soat["fecha_vencimiento"]:
+                                            st.info(f"Nueva fecha detectada: {res_soat['fecha_vencimiento'].strftime('%d/%m/%Y')}")
+                                    else:
+                                        mostrar_alerta("danger", f"Error de calidad: {res_soat['mensaje_general']}")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Error al actualizar en DB: {res_db['mensaje']}")
+
+                # ─── Pestaña 4: Eliminar ───
+                with tab4:
+                    st.warning("⚠️ Acción irreversible.")
+                    st.markdown(f"Estás a punto de eliminar a **{current.get('nombres')}** con cédula **{current.get('identificacion')}**.")
+                    if st.button("🗑️ Confirmar Eliminación", use_container_width=True, type="primary"):
+                        if db.eliminar_trabajador(current["id"]):
+                            st.success("✅ Trabajador eliminado correctamente.")
+                            st.rerun()
+                        else:
+                            st.error("Error al eliminar.")
 
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-    st.markdown("### 📋 Base de Datos")
-    _mostrar_tabla()
+    st.markdown("### 📋 Base de Datos Completa")
+    _mostrar_tabla(todos_trab)
 
 def _mostrar_graficos(ind):
     c1, c2 = st.columns(2)
@@ -153,7 +224,6 @@ def _mostrar_graficos(ind):
         st.plotly_chart(fig, use_container_width=True)
 
 def _color_estado(val):
-    """Función auxiliar para pintar las celdas del estado del SOAT en la tabla."""
     if val == "Vigente":
         return "background-color: #c8e6c9; color: #1b5e20; font-weight:600"
     elif val == "Por vencer":
@@ -164,8 +234,7 @@ def _color_estado(val):
         return "background-color: #e1bee7; color: #6a1b9a; font-weight: 600"
     return "background-color: #e0e0e0; color: #616161; font-weight: 600"
 
-def _mostrar_tabla():
-    todos = db.obtener_todos_trabajadores()
+def _mostrar_tabla(todos):
     if not todos:
         st.info("📭 Base de datos vacía.")
         return
@@ -173,7 +242,7 @@ def _mostrar_tabla():
     df = pd.DataFrame(todos)[
         ["identificacion", "nombres", "cargo", "tipo_vehiculo", "placa", "soat_estado", "soat_vigencia", "fecha_registro"]
     ].rename(columns={
-        "identificacion": "ID", "nombres": "Nombre", "cargo": "Cargo",
+        "identificacion": "ID/Cédula", "nombres": "Nombre", "cargo": "Cargo",
         "tipo_vehiculo": "Tipo", "placa": "Placa",
         "soat_estado": "Estado SOAT", "soat_vigencia": "Vencimiento",
         "fecha_registro": "Fecha Registro"
