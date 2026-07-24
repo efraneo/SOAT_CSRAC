@@ -126,6 +126,38 @@ class Database:
             print(f"Error eliminando trabajador: {e}")
             return False
 
+    def obtener_trabajador_por_id(self, trabajador_id: str) -> dict | None:
+        try:
+            response = self.client.table("trabajadores").select("*").eq("id", trabajador_id).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"Error buscando por ID: {e}")
+            return None
+
+    def actualizar_trabajador(self, trabajador_id: str, datos: dict, archivo_bytes: bytes = None, nombre_archivo: str = None) -> dict:
+        """Actualiza datos de un trabajador. Si se pasa un archivo, sube el nuevo SOAT."""
+        try:
+            if archivo_bytes and nombre_archivo:
+                url_soat = self.subir_archivo_soat(archivo_bytes, nombre_archivo)
+                datos["soat_url"] = url_soat
+                datos["soat_nombre_archivo"] = nombre_archivo
+                
+                # Si actualiza la imagen, re-validamos
+                from soat_validator import SOATValidator
+                validator = SOATValidator()
+                res_soat = validator.validar_archivo(archivo_bytes, nombre_archivo)
+                datos["soat_estado"] = res_soat.get("estado", "No legible")
+                datos["soat_vigencia"] = res_soat.get("fecha_vencimiento").isoformat() if res_soat.get("fecha_vencimiento") else None
+                datos["soat_calidad_imagen"] = res_soat.get("calidad_score", 0)
+                datos["calidad_imagen_ok"] = res_soat.get("calidad_ok", False)
+
+            response = self.client.table("trabajadores").update(datos).eq("id", trabajador_id).execute()
+            if response.data:
+                return {"exito": True, "datos": response.data[0]}
+            return {"exito": False, "mensaje": "No se recibieron datos del servidor."}
+        except Exception as e:
+            return {"exito": False, "mensaje": str(e)}
+
     # ═══════════════════════════════════════════════════
     #  OPERACIONES GARITA Y SST
     # ═══════════════════════════════════════════════════
