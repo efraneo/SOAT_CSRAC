@@ -79,11 +79,14 @@ def _paso_3():
         with st.form("f_vs"):
             tv = st.selectbox("🚘 Tipo Vehículo", ["Selecciona...", "Automovil", "Motocicleta"], key="tv")
             pl = st.text_input("🔢 Placa", placeholder="ABC123", key="pl")
-            
-            # ✅ SE AGREGÓ "pdf" AQUÍ
             ar = st.file_uploader("📄 Soporte SOAT (Imagen o PDF)", type=["jpg", "jpeg", "png", "bmp", "tiff", "webp", "pdf"])
             
-            if ar: st.image(ar, caption="Vista previa", width=400)
+            # ✅ SOLUCIÓN: Solo mostrar vista previa si NO es PDF
+            if ar and ar.type != "application/pdf":
+                st.image(ar, caption="Vista previa del SOAT", width=400)
+            elif ar and ar.type == "application/pdf":
+                mostrar_alerta("success", f"📄 Archivo PDF '{ar.name}' cargado correctamente. Se procesará al enviar.")
+            
             if st.form_submit_button("Siguiente →", use_container_width=True):
                 err = []
                 if tv == "Selecciona...": err.append("Seleccione tipo.")
@@ -93,7 +96,7 @@ def _paso_3():
                 if err:
                     for e in err: mostrar_alerta("danger", e)
                 else:
-                    with st.spinner("🔍 Analizando SOAT (Esto puede tardar 10 segundos)..."):
+                    with st.spinner("🔍 Analizando SOAT (Esto puede tardar unos segundos)..."):
                         bytes_soat = ar.read()
                         res = soat_validator.validar_archivo(bytes_soat, ar.name)
                     st.session_state.update({"resultado_soat": res, "archivo_soat_bytes": bytes_soat, "archivo_soat_nombre": ar.name, "datos_vehiculo": {"tipo_vehiculo": tv, "placa": pl.strip().upper()}, "paso_registro": 4})
@@ -123,7 +126,6 @@ def _paso_4():
                     res_bd = db.registrar_trabajador(datos_completos)
                     if res_bd["exito"]:
                         email_svc.enviar_confirmacion_registro(dp["correo"], datos_completos, st.session_state["archivo_soat_bytes"], st.session_state["archivo_soat_nombre"])
-                        # Solo enviar notificación de mala calidad si es "No legible" real, NO si es "Pendiente"
                         if rs.get("estado") == "No legible": 
                             email_svc.enviar_notificacion_imagen(dp["correo"], rs.get("calidad_mensaje", "No se pudo leer."))
                         for key in list(st.session_state.keys()): del st.session_state[key]
